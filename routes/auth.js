@@ -36,6 +36,7 @@ router.post("/register", async (req, res) => {
         email: user.email,
         name: user.name,
         role: user.role,
+        profilePicture: user.profilePicture,
         digitalLiteracyLevel: user.digitalLiteracyLevel,
       },
     });
@@ -77,6 +78,7 @@ router.post("/login", async (req, res) => {
         email: user.email,
         name: user.name,
         role: user.role,
+        profilePicture: user.profilePicture,
         digitalLiteracyLevel: user.digitalLiteracyLevel,
       },
     });
