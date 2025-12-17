@@ -1,4 +1,4 @@
-const mongoose = require("mongoose")
+const mongoose = require("mongoose");
 
 const assessmentSchema = new mongoose.Schema(
   {
@@ -30,8 +30,9 @@ const assessmentSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    isAiGenerated: { type: Boolean, default: false },
   },
-  { timestamps: true },
-)
+  { timestamps: true }
+);
 
-module.exports = mongoose.model("Assessment", assessmentSchema)
+module.exports = mongoose.model("Assessment", assessmentSchema);

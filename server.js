@@ -8,6 +8,7 @@ const resultRoutes = require("./routes/results");
 const learningRoutes = require("./routes/learningModules");
 const dashboardRoutes = require("./routes/dashboard");
 const userRoutes = require("./routes/users");
+const aiAssessmentsRoutes = require("./routes/aiassessment");
 
 dotenv.config();
 
@@ -33,6 +34,7 @@ app.use("/api/results", resultRoutes);
 app.use("/api/learning-modules", learningRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api", aiAssessmentsRoutes);
 
 // Health check
 app.get("/api/health", (req, res) => {
