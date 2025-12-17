@@ -25,6 +25,21 @@ const assessmentSchema = new mongoose.Schema(
       type: Number,
       default: 100,
     },
+    skillCategory: {
+  type: String,
+  enum: [
+    'basic', 
+    'intermediate', 
+    'advanced',
+    'iq',      // Add these
+    'math',
+    'science',
+    'general',
+    'computer'
+  ],
+  required: true
+},
+
     timeLimit: Number, // in minutes
     createdAt: {
       type: Date,

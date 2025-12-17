@@ -46,24 +46,36 @@ function deriveDifficultyFromAge(ageGroup) {
   return "hard";
 }
 
+// ----- helper: get topic-specific prompt -----
+function getTopicPrompt(topic) {
+  const topics = {
+    iq: "IQ/Logical reasoning - focus on patterns, sequences, puzzles, spatial reasoning, and logic problems",
+    math: "Mathematics - focus on arithmetic, algebra, geometry, basic calculations, and math reasoning",
+    science: "Science - focus on physics, chemistry, biology, basic scientific concepts and principles",
+    general: "General knowledge - focus on everyday knowledge, current affairs, geography, history, and common sense",
+    computer: "Computer/Technology - focus on programming basics, computer hardware, software, internet, and tech concepts"
+  };
+  return topics[topic] || topics.general;
+}
+
 // ----- helper: call Gemini via GoogleGenAI to generate questions -----
-async function callAiProvider({ ageGroup, questionCount }) {
+async function callAiProvider({ ageGroup, questionCount, topic }) {
   const difficulty = deriveDifficultyFromAge(ageGroup);
+  const topicPrompt = getTopicPrompt(topic);
 
   const prompt = `
-You are a question generator for a digital skills assessment.
+You are a question generator for an assessment test.
 Generate ${questionCount} multiple-choice questions as a strict JSON array.
 
 Audience:
 - Age group: ${ageGroup}
 - Difficulty: ${difficulty}
-
-Topic: basic digital literacy and computer usage (no programming).
+- Topic: ${topicPrompt}
 
 Each question object must have exactly these fields:
 - "id": a short string id (e.g. "1", "2", ...)
-- "question": the question text
-- "options": an array of exactly 4 answer options (short, clear)
+- "question": the question text (clear and concise)
+- "options": an array of exactly 4 answer options (short, clear, one correct)
 - "correctAnswer": one of the options, copied exactly
 - "explanation": a short explanation of why the correct answer is right
 
@@ -71,10 +83,10 @@ Return ONLY valid JSON (no comments, no extra text), like:
 [
   {
     "id": "1",
-    "question": "...",
-    "options": ["...","...","...","..."],
-    "correctAnswer": "...",
-    "explanation": "..."
+    "question": "What is 2 + 2?",
+    "options": ["3", "4", "5", "6"],
+    "correctAnswer": "4",
+    "explanation": "Basic arithmetic: 2 plus 2 equals 4."
   }
 ]
 `.trim();
@@ -89,7 +101,6 @@ Return ONLY valid JSON (no comments, no extra text), like:
       ?.map((p) => p.text || "")
       .join(" ")
       .trim() || "";
-
 
   // Extract JSON from response (handles extra text)
   let questions;
@@ -132,8 +143,6 @@ Return ONLY valid JSON (no comments, no extra text), like:
   });
 }
 
-
-
 // ----- route: generate AI assessment -----
 router.post(
   "/ai-assessments/generate",
@@ -141,12 +150,23 @@ router.post(
   requireStudent,
   async (req, res) => {
     try {
-      const { ageGroup, questionCount, timeLimit } = req.body;
+      const { ageGroup, questionCount, timeLimit, topic } = req.body;
 
-      if (!ageGroup || !questionCount) {
+      // Validate required fields
+      if (!ageGroup || !questionCount || !topic) {
         return res
           .status(400)
-          .json({ error: "ageGroup and questionCount are required" });
+          .json({ error: "ageGroup, questionCount, and topic are required" });
+      }
+
+      // Validate topic
+      const validTopics = ["iq", "math", "science", "general", "computer"];
+      if (!validTopics.includes(topic)) {
+        return res
+          .status(400)
+          .json({ 
+            error: `Invalid topic. Must be one of: ${validTopics.join(", ")}` 
+          });
       }
 
       const countNum = Number(questionCount);
@@ -165,14 +185,23 @@ router.post(
       const cleanedQuestions = await callAiProvider({
         ageGroup,
         questionCount: countNum,
+        topic,
       });
 
+      const topicNames = {
+        iq: "IQ & Logical Reasoning",
+        math: "Mathematics",
+        science: "Science",
+        general: "General Knowledge",
+        computer: "Computer Science"
+      };
+
       const assessmentDoc = await Assessment.create({
-        title: `AI assessment (${ageGroup})`,
-        description: `Auto-generated digital skills assessment for age ${ageGroup}.`,
-        skillCategory: "basic",
+        title: `AI ${topicNames[topic]} Test (${ageGroup})`,
+        description: `Auto-generated ${topicNames[topic].toLowerCase()} assessment for age ${ageGroup}.`,
+        skillCategory: topic,
         totalPoints: cleanedQuestions.length,
-        timeLimit: timeLimitNum, // use validated value
+        timeLimit: timeLimitNum,
         questions: cleanedQuestions,
         isAiGenerated: true,
       });
@@ -186,6 +215,5 @@ router.post(
     }
   }
 );
-
 
 module.exports = router;
