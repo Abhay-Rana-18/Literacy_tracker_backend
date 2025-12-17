@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
+dotenv.config();
 const mongoose = require("mongoose");
 const authRoutes = require("./routes/auth");
 const assessmentRoutes = require("./routes/assessments");
@@ -9,8 +10,6 @@ const learningRoutes = require("./routes/learningModules");
 const dashboardRoutes = require("./routes/dashboard");
 const userRoutes = require("./routes/users");
 const aiAssessmentsRoutes = require("./routes/aiassessment");
-
-dotenv.config();
 
 const app = express();
 

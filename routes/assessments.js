@@ -179,22 +179,54 @@ router.delete("/:id", authMiddleware, isTeacherOrAdmin, async (req, res) => {
       assessmentId: req.params.id,
     });
 
+    // Count UserProgress records affected
+    const progressCount = await UserProgress.countDocuments({
+      $or: [
+        { assessmentId: req.params.id }, // current assessment in progress
+        { "assessmentsCompleted.assessmentId": req.params.id } // completed assessments
+      ]
+    });
+
     if (resultCount > 0) {
-      return res.status(400).json({
-        error: `Cannot delete assessment. ${resultCount} student(s) have already taken this assessment.`,
-        resultCount,
+      // Delete all associated student results first
+      await AssessmentResult.deleteMany({
+        assessmentId: req.params.id,
       });
+      console.log(`Deleted ${resultCount} student results for assessment ${req.params.id}`);
     }
 
+    if (progressCount > 0) {
+      // Remove assessment references from UserProgress
+      await UserProgress.updateMany(
+        { 
+          $or: [
+            { assessmentId: req.params.id },
+            { "assessmentsCompleted.assessmentId": req.params.id }
+          ]
+        },
+        { 
+          $pull: { 
+            assessmentsCompleted: { assessmentId: req.params.id } 
+          },
+          $unset: { assessmentId: req.params.id }
+        }
+      );
+      console.log(`Cleaned ${progressCount} UserProgress records for assessment ${req.params.id}`);
+    }
+
+    // Now delete the assessment
     await Assessment.findByIdAndDelete(req.params.id);
 
     res.json({
-      message: "Assessment deleted successfully",
+      message: `Assessment deleted successfully${resultCount > 0 || progressCount > 0 ? ` (${resultCount} results, ${progressCount} progress records)` : ''}`,
     });
   } catch (error) {
+    console.error("Delete assessment error:", error);
     res.status(500).json({ error: error.message });
   }
 });
+
+
 
 // Duplicate assessment (Teacher/Admin only)
 router.post(

@@ -3,13 +3,19 @@ const express = require("express");
 const router = express.Router();
 const Assessment = require("../models/Assessment");
 const authMiddleware = require("../middleware/auth");
-
-// optional: only allow students to generate
 const User = require("../models/User");
 
+// NEW: use @google/genai client
+const { GoogleGenAI } = require("@google/genai");
+
+// The client gets the API key from the environment variable `GEMINI_API_KEY`.
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
+
+// ----- role guard: only students can generate -----
 async function requireStudent(req, res, next) {
   try {
-    // req.userId should be set by your auth middleware from the token
     if (!req.userId) {
       return res.status(401).json({ error: "Not authenticated" });
     }
@@ -19,17 +25,13 @@ async function requireStudent(req, res, next) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    console.log("User role:", user.role);
-
     if (user.role !== "student") {
       return res
         .status(403)
         .json({ error: "Only students can generate tests" });
     }
 
-    // Optionally attach user to req for later use
     req.user = user;
-
     next();
   } catch (err) {
     console.error("requireStudent error:", err);
@@ -37,33 +39,109 @@ async function requireStudent(req, res, next) {
   }
 }
 
-// helper to call your AI provider (pseudo‑code)
-async function callAiProvider({ ageGroup, difficulty, questionCount }) {
-  // Build a prompt asking for strict JSON in your target shape.
-  // Here we just stub with fake questions.
-  const questions = [];
-  for (let i = 0; i < questionCount; i++) {
-    const opts = ["Option A", "Option B", "Option C", "Option D"];
-    questions.push({
-      id: String(i + 1),
-      question: `Sample question ${
-        i + 1
-      } for age ${ageGroup}, difficulty ${difficulty}?`,
-      options: opts,
-      correctAnswer: opts[0],
-      explanation: "Sample explanation.",
-    });
-  }
-  return questions;
+// ----- helper: derive difficulty from age group (for prompt only) -----
+function deriveDifficultyFromAge(ageGroup) {
+  if (ageGroup === "8-12") return "easy";
+  if (ageGroup === "13-18") return "medium";
+  return "hard";
 }
 
+// ----- helper: call Gemini via GoogleGenAI to generate questions -----
+async function callAiProvider({ ageGroup, questionCount }) {
+  const difficulty = deriveDifficultyFromAge(ageGroup);
+
+  const prompt = `
+You are a question generator for a digital skills assessment.
+Generate ${questionCount} multiple-choice questions as a strict JSON array.
+
+Audience:
+- Age group: ${ageGroup}
+- Difficulty: ${difficulty}
+
+Topic: basic digital literacy and computer usage (no programming).
+
+Each question object must have exactly these fields:
+- "id": a short string id (e.g. "1", "2", ...)
+- "question": the question text
+- "options": an array of exactly 4 answer options (short, clear)
+- "correctAnswer": one of the options, copied exactly
+- "explanation": a short explanation of why the correct answer is right
+
+Return ONLY valid JSON (no comments, no extra text), like:
+[
+  {
+    "id": "1",
+    "question": "...",
+    "options": ["...","...","...","..."],
+    "correctAnswer": "...",
+    "explanation": "..."
+  }
+]
+`.trim();
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+  });
+
+  const text =
+    response.candidates?.[0]?.content?.parts
+      ?.map((p) => p.text || "")
+      .join(" ")
+      .trim() || "";
+
+
+  // Extract JSON from response (handles extra text)
+  let questions;
+  const jsonMatch = text.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    try {
+      questions = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      console.error("JSON parse error:", e, "matched:", jsonMatch[0]);
+      throw new Error("AI returned invalid JSON");
+    }
+  } else {
+    console.error("No JSON array found in response");
+    throw new Error("AI did not return valid JSON array");
+  }
+
+  if (!Array.isArray(questions) || questions.length === 0) {
+    throw new Error("AI did not return a questions array");
+  }
+
+  return questions.map((q, index) => {
+    if (
+      !q ||
+      typeof q.question !== "string" ||
+      !Array.isArray(q.options) ||
+      q.options.length !== 4 ||
+      typeof q.correctAnswer !== "string" ||
+      !q.options.includes(q.correctAnswer)
+    ) {
+      throw new Error("Invalid question format from AI");
+    }
+
+    return {
+      id: q.id || String(index + 1),
+      question: q.question,
+      options: q.options,
+      correctAnswer: q.correctAnswer,
+      explanation: q.explanation || "",
+    };
+  });
+}
+
+
+
+// ----- route: generate AI assessment -----
 router.post(
   "/ai-assessments/generate",
   authMiddleware,
   requireStudent,
   async (req, res) => {
     try {
-      const { ageGroup, questionCount } = req.body;
+      const { ageGroup, questionCount, timeLimit } = req.body;
 
       if (!ageGroup || !questionCount) {
         return res
@@ -78,41 +156,36 @@ router.post(
           .json({ error: "questionCount must be between 3 and 30" });
       }
 
-      // You can still infer difficulty purely for the AI prompt if you want:
-      // const difficulty = deriveDifficultyFromAge(ageGroup); // optional
+      // optional timer: default 10 if not provided / invalid
+      let timeLimitNum = Number(timeLimit);
+      if (Number.isNaN(timeLimitNum) || timeLimitNum <= 0 || timeLimitNum > 180) {
+        timeLimitNum = 10;
+      }
 
-      const aiQuestions = await callAiProvider({
+      const cleanedQuestions = await callAiProvider({
         ageGroup,
         questionCount: countNum,
-        // difficulty,  // only used inside the AI call, not stored
       });
-
-      const cleanedQuestions = aiQuestions.map((q, index) => ({
-        id: q.id || String(index + 1),
-        question: q.question,
-        options: q.options,
-        correctAnswer: q.correctAnswer,
-        explanation: q.explanation || "",
-      }));
 
       const assessmentDoc = await Assessment.create({
         title: `AI assessment (${ageGroup})`,
         description: `Auto-generated digital skills assessment for age ${ageGroup}.`,
-        // skillCategory must be "basic" | "intermediate" | "advanced"
-        skillCategory: "basic", // or choose one based on your own logic
+        skillCategory: "basic",
         totalPoints: cleanedQuestions.length,
-        timeLimit: 20,
+        timeLimit: timeLimitNum, // use validated value
         questions: cleanedQuestions,
         isAiGenerated: true,
       });
 
       res.json({ assessment: assessmentDoc });
     } catch (err) {
+      console.error("AI assessment generation error:", err);
       res
         .status(500)
         .json({ error: err.message || "Failed to generate AI assessment" });
     }
   }
 );
+
 
 module.exports = router;
